@@ -1,0 +1,9 @@
+[package]
+name = "bindgen-runner"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bindgen = { git = "https://github.com/rust-lang/rust-bindgen.git" }
+cargo_toml = "0.22.1"
+toml = { version = "0.8.22", features = ["preserve_order"] }
