@@ -4,12 +4,12 @@ fn main() {
     // for example, "x86_64-unknown-linux-gnu" target emits "x86_64_unknown_linux_gnu.rs"
     fn generate_platform(platform: &str) -> String {
         bindgen::builder()
-            .clang_arg("-I../Vulkan-Headers/include")
+            .clang_arg("-I../_external/Vulkan-Headers/include")
             .clang_arg("-DVK_NO_PROTOTYPES")
             .clang_arg(format!("--target={platform}"))
             .clang_arg("-fparse-all-comments")
             .generate_comments(true)
-            .header("../Vulkan-Headers/include/vulkan/vulkan.h")
+            .header(".../_external/Vulkan-Headers/include/vulkan/vulkan.h")
             .allowlist_recursively(true)
             .allowlist_file(".*vulkan_core.h")
             .use_core()
