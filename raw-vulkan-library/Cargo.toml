@@ -2,18 +2,3 @@
 name = "raw-vulkan-library"
 version = "0.1.0"
 edition = "2024"
-
-[features]
-force_enable_aarch64-linux-android = []
-force_enable_aarch64-unknown-linux-gnu = []
-force_enable_i686-pc-windows-msvc = []
-force_enable_i686-unknown-linux-gnu = []
-force_enable_x86_64-pc-windows-msvc = []
-force_enable_x86_64-unknown-linux-gnu = []
-
-[lib]
-path = "src/lib.rs"
-name = "raw_vulkan_library"
-edition = "2024"
-crate-type = ["lib"]
-required-features = []

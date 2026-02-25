@@ -1,90 +1,110 @@
-use std::fs;
+mod utils;
 
-fn main() {
-    // for example, "x86_64-unknown-linux-gnu" target emits "x86_64_unknown_linux_gnu.rs"
-    fn generate_platform(platform: &str) -> String {
-        bindgen::builder()
-            .clang_arg("-I../_external/Vulkan-Headers/include")
+use std::{env, ffi::OsString, fs, path::Path, sync::LazyLock};
+
+use quote::ToTokens;
+
+use crate::utils::*;
+
+pub static VULKAN_INCLUDE: LazyLock<OsString> = LazyLock::new(|| {
+    env::var_os("VULKAN_INCLUDE").expect("MUST specify VULKAN_INCLUDE enviroment variable")
+});
+
+#[allow(dead_code)]
+fn gen_const_asserts() -> anyhow::Result<()> {
+    for platform in Platform::TYPICAL {
+        let vulkan_include: &Path = VULKAN_INCLUDE.as_ref();
+        let code = common_generator()
+            .clang_args(["-I", vulkan_include.to_str().unwrap()])
             .clang_arg("-DVK_NO_PROTOTYPES")
-            .clang_arg(format!("--target={platform}"))
-            .clang_arg("-fparse-all-comments")
-            .generate_comments(true)
-            .header(".../_external/Vulkan-Headers/include/vulkan/vulkan.h")
+            .clang_arg(format!("--target={}", &platform.triplet))
+            .header(vulkan_include.join("vulkan/vulkan.h").to_string_lossy())
             .allowlist_recursively(true)
-            .allowlist_file(".*vulkan_core.h")
-            .use_core()
-            .raw_line(r"#![allow(non_snake_case)]")
-            .raw_line(r"#![allow(non_camel_case_types)]")
-            .raw_line(r"#![allow(non_upper_case_globals)]")
-            .raw_line(r"#![allow(dead_code)]")
-            .raw_line(r"#![allow(unused_imports)]")
-            .raw_line(r"#![allow(clippy::useless_transmute)]")
-            .raw_line(r"#![allow(clippy::too_many_arguments)]")
-            .raw_line(r"#![allow(clippy::ptr_offset_with_cast)]")
-            .sort_semantically(true)
-            .generate()
-            .unwrap()
-            .to_string()
-    }
-
-    let platforms = vec![
-        Platform {
-            platform: "x86_64-unknown-linux-gnu",
-            cfg_pred: "all(target_arch = \"x86_64\", unix)",
-        },
-        Platform {
-            platform: "x86_64-pc-windows-msvc",
-            cfg_pred: "all(target_arch = \"x86_64\", windows)",
-        },
-        Platform {
-            platform: "i686-pc-windows-msvc",
-            cfg_pred: "all(target_arch = \"x86\", windows)",
-        },
-        Platform {
-            platform: "i686-unknown-linux-gnu",
-            cfg_pred: "all(target_arch = \"x86\", unix)",
-        },
-        Platform {
-            platform: "aarch64-unknown-linux-gnu",
-            cfg_pred: "all(target_arch = \"aarch64\", unix)",
-        },
-        Platform {
-            platform: "aarch64-linux-android",
-            cfg_pred: "all(target_arch = \"aarch64\", target_os = \"android\")",
-        },
-    ];
-    let mut lib_rs = String::new();
-    let mut cargotoml =
-        cargo_toml::Manifest::from_path("../raw-vulkan-library/Cargo.toml").unwrap();
-    cargotoml.features.clear();
-    lib_rs += "#![cfg_attr(not(test), no_std)]\n";
-    for p @ Platform { platform, cfg_pred } in platforms {
-        let code = generate_platform(platform);
-        let mod_name = p.mod_name();
+            .allowlist_file(r".*vulkan.*\.h")
+            .prepend_enum_name(false)
+            .sort_semantically(false)
+            .generate()?
+            .to_string();
+        let mut syntax_tree = syn::parse_file(&code)?;
+        let const_asserts = extract_const_asserts(&mut syntax_tree.items);
+        let const_asserts_tree = syn::File {
+            shebang: Default::default(),
+            attrs: Default::default(),
+            items: const_asserts,
+        };
+        let const_asserts_code = const_asserts_tree.to_token_stream().to_string();
+        let reformatted_code = rustfmt_huge_width(&const_asserts_code)?;
         fs::write(
-            format!("../raw-vulkan-library/src/vulkan_core_{mod_name}.rs"),
+            &format!("output/layout_assert_{}.rs", platform.mod_name()),
+            reformatted_code,
+        )?;
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn gen_core() -> anyhow::Result<()> {
+    for platform in Platform::TYPICAL {
+        let vulkan_include: &Path = VULKAN_INCLUDE.as_ref();
+        let code = common_generator()
+            .clang_args(["-I", vulkan_include.to_str().unwrap()])
+            .clang_arg("-DVK_NO_PROTOTYPES")
+            .clang_arg(format!("--target={}", &platform.triplet))
+            .header(vulkan_include.join("vulkan/vulkan.h").to_string_lossy())
+            .allowlist_recursively(true)
+            .allowlist_file(r".*vulkan.*\.h")
+            .prepend_enum_name(false)
+            .generate()?
+            .to_string();
+        let mut syntax_tree = syn::parse_file(&code)?;
+        let _ = extract_const_asserts(&mut syntax_tree.items);
+        let code = prettyplease::unparse(&syntax_tree);
+        fs::write(
+            format!("output/vulkan_core_{}.rs", platform.mod_name()),
             code,
-        )
-        .unwrap();
-        let feature_flag = format!("force_enable_{platform}");
-        lib_rs += &format!("#[cfg(any({cfg_pred}, feature = \"{feature_flag}\"))]\n");
-        lib_rs += &format!("mod vulkan_core_{mod_name};\n");
-        lib_rs += &format!("#[cfg(any({cfg_pred}, feature = \"{feature_flag}\"))]\n");
-        lib_rs += &format!("pub use vulkan_core_{mod_name}::*;\n");
-        cargotoml.features.insert(feature_flag, Vec::new());
+        )?;
     }
-    fs::write("../raw-vulkan-library/src/lib.rs", lib_rs).unwrap();
-    let new_cargo_toml = toml::to_string_pretty(&cargotoml).unwrap();
-    fs::write("../raw-vulkan-library/Cargo.toml", new_cargo_toml).unwrap();
+    Ok(())
 }
 
-struct Platform {
-    platform: &'static str,
-    cfg_pred: &'static str,
+#[allow(dead_code)]
+fn gen_win64_core() -> anyhow::Result<()> {
+    let platform = Platform::_WIN64;
+    let vulkan_include: &Path = VULKAN_INCLUDE.as_ref();
+    let bf = generate_bitfield_types(&platform)?;
+    let block_types = bf
+        .iter()
+        .map(|(i, _)| i.ident.to_string())
+        .collect::<Vec<_>>();
+    let block_type_re = block_types.join("|");
+    let guards = preprocess_guards(&platform)?;
+    let block_var_re = guards.join("|");
+    let code = common_generator()
+        .clang_args(["-I", vulkan_include.to_str().unwrap()])
+        .clang_arg("-DVK_NO_PROTOTYPES")
+        .clang_arg(format!("--target={}", &platform.triplet))
+        .header(vulkan_include.join("vulkan/vulkan.h").to_string_lossy())
+        .allowlist_recursively(true)
+        .allowlist_file(r".*vulkan.*\.h")
+        .blocklist_type(&block_type_re)
+        .blocklist_var(&block_var_re)
+        .parse_callbacks(Box::new(MyCallbacks))
+        .prepend_enum_name(false)
+        .generate()?
+        .to_string();
+    let mut syntax_tree = syn::parse_file(&code)?;
+    let _ = extract_const_asserts(&mut syntax_tree.items);
+    syntax_tree
+        .items
+        .extend(bf.into_iter().map(|(i, _)| i.into()));
+    let code = prettyplease::unparse(&syntax_tree);
+    fs::write("output/vulkan_core.rs", code)?;
+    Ok(())
 }
 
-impl Platform {
-    fn mod_name(&self) -> String {
-        self.platform.replace("-", "_")
-    }
+fn main() -> anyhow::Result<()> {
+    gen_const_asserts()?;
+    gen_core()?;
+    gen_win64_core()?;
+    Ok(())
 }
